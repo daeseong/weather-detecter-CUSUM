@@ -1,0 +1,257 @@
+---
+title: "HW3"
+author: "dk6501"
+date: "2024-09-10"
+output:
+  pdf_document: default
+  html_document:
+    df_print: paged
+---
+#### **Question 5.1**
+**Using crime data from the file uscrime.txt (description at http://www.statsci.org/data/general/uscrime.html), test to see whether there are any outliers in the last column (number of crimes per 100,000 people).  Use the grubbs.test function in the outliers package in R.**
+```{r init, message=FALSE}
+# Clear environment, initialize libraries, load data
+rm(list = ls())
+library(outliers)
+library(ggplot2)
+set.seed(7)
+df <- read.table("uscrime.txt", header=TRUE)
+```
+
+First, we begin by testing if the Crime data is normally distributed. The null hypothesis for the Shapiro-Wilk test is that, the data is normally distributed. We found that the p-value of `0.001882` which suggests that the distribution is not normal. The null hypothesis is further explained later in this section. If we look at another normal test, the QQ-plot, the majority of the data is normally distributed shown by linear points, except for the outliers (Patrick OH Monday 9.9).
+
+```{r shapiro_test}
+
+shapiro.test(df[,"Crime"])
+qqnorm(df[,"Crime"])
+
+```
+
+
+Next, we will inspect the boxplot of the Crime column. From the bottom whisker to the top whisker, we have Minimum = Q1 - 1.5 * IQR, where IQR is Q3 - Q1. Then Q1, Median, Q3, and Maximum = Q3 + 1.5 * IQR. The blue triangle represents the mean.
+
+```{r boxplot}
+
+ggplot(df, aes(x = "", y = Crime)) +
+  geom_boxplot(outlier.color = "red") +
+  stat_summary(fun = mean, geom = "point", shape = 2, size = 5, color = "blue") +
+  labs(title = "Number of Offenses per 100,000 Population in 1960", 
+           y = "Crime Rate", x = "")
+
+```
+
+We observe that the outliers, marked in red, are on one side of the boxplot. Grubbs' test can help detect an outlier in the data. It will be up to the analyst to determine whether or not the outlier is statistically significant and conclude that an outlier exists. The significance level \(\alpha\), is determined based on how important a false positive vs. false negative is. An example given in lecture (Module6_L2) is the cost associated when a change is detected but isn't there, and the cost when a change happens but the model fails to notice. Since our sample size is small (about 50 rows), we will use \(\alpha=0.10\). 
+
+
+
+```{r grubbs}
+
+test <- grubbs.test(df[,"Crime"], type=10)
+print(test)
+
+```
+
+In hypothesis testing, p-value and significance level determines whether we reject the null hypothesis or we fail to reject the null hypothesis. 
+\begin{align*}
+H_0 = \text{No outlier in data}\\
+H_1 = \text{Outlier in data }
+\end{align*}
+
+In this case, the \(p = 0.079\) which is less than \(\alpha = 0.10\). Therefore, we reject \(H_0\) and we can conclude that the value of `1993` is an outlier. If we had set \(\alpha = 0.05\) we would fail to reject the null hypothesis, meaning that `1993` is not an outlier. Clearly this would be incorrect. We will touch on this briefly at the end of this section (Biswal, A.).
+
+From the previous boxplot, there is another possible outlier. Since Grubbs' Test only looks at 1 outlier, we will remove the value `1993` and run it again.
+
+```{r 2nd outlier test}
+
+test_2 <- grubbs.test(df$Crime[-which.max(df[,"Crime"])])
+print(test_2)
+
+```
+
+Again, we observe that \(p < \alpha\), where \(p=0.028\), so we again reject the null hypothesis and can conclude that `1969` is also an outlier. An interesting thing to note is that the most extreme outlier had higher p-value than the 2nd outlier. This is due to the 2nd outlier where `Crime = 1969` affected the Grubbs' test for `Crime Rate = 1993`, meaning it had a strong influence in determining if the first outlier was significant. Once the first outlier is removed, we see that most of the data is within the min-max range of the boxplot. This makes `Crime = 1969` much more statistically significant since we are comparing it to only a normal distribution (which we assumed). This is also known as masking (inflating variance due to other outliers) (Graphpad).
+
+<br>
+
+#### **Question 6.1**
+**Describe a situation or problem from your job, everyday life, current events, etc., for which a Change Detection model would be appropriate. Applying the CUSUM technique, how would you choose the critical value and the threshold?**
+
+A change detection model would be appropriate to see if there is any significant decrease or increase in user engagement. We would first have a general idea on what value we are expecting by using past years figures. Some examples of user engagement metrics would be (DAU, MAU, CTR, etc.). 
+
+<br>
+
+The business goal is when we detect a decrease in MAU, what happened during that period, and could we bring the metric back with a marketing campaign or push notification. If we use a metric like Monthly Active User, we calculate the CUSUM parameters by looking at previous numbers and current numbers. Typical values are \(C = \frac{1}{2} \sigma\), and \(T = \pm4\sigma\) (Ted Hessing, 2024). However, it would be better to pick values according to context and knowledge. For example, if we know that average MAU \(\mu = 1000\), and we want to detect a change when \(T = 600\), we could set \(C = 200\), where \(\sigma = 400\). 
+<br>
+![Standard Deviation](sd.JPG)
+
+<br>
+
+#### **Question 6.2.1**
+**Using July through October daily-high-temperature data for Atlanta for 1996 through 2015, use a CUSUM approach to identify when unofficial summer ends (i.e., when the weather starts cooling off) each year.**
+
+
+```{r, message=FALSE}
+rm(list = ls())
+library(ggplot2)
+library(qcc)
+
+set.seed(7)
+
+df <- read.table("temps.txt", header = TRUE)
+temp_df <- df[,2:ncol(df)]
+years <- ncol(temp_df)
+
+```
+
+We ran multiple combinations of C and T, and used the CUSUM plots to determine which combinations gave a good balance of early detection and fewer false positives. We observed that `T = 6` and `C = 5` returned a balanced result. These values are in terms of standard error. Note, that these are not the same values discussed in the Module 6 Lectures. We will define and calculate those values below.
+
+<br>
+```{r cusum}
+
+# Begin by finding mu for each year as baseline (mean of period with no change)
+# summer between June 1 - Aug 31. Since July is in the middle, we will use this as baseline
+
+mu_temp <- rep(0, years)
+sd_temp <- rep(0, years)
+
+for (y in 1:years) {
+  
+  mu_temp[y] <- round(mean(temp_df[[y]][1:31]), digits = 2)
+  sd_temp[y] <- round(sd(temp_df[[y]][1:31]), digits = 3)
+  
+}
+
+# Parameters for CUSUM
+T = 6 # number of standard errors of summary stat where cusum is out of control
+C = 5 # amount of shift to detect, measured in standard errors of summary stat
+
+# Stores attributes for cusum model
+cs <- vector(mode = "list", length = years)
+
+# Stores row index when first S_t <= T occurs
+first_occ <- rep(0, years)
+
+end_summer <- as.data.frame(matrix(nrow = years, ncol = 3))
+# AvgTemp will be used for 6.2.2
+colnames(end_summer) <- c("Year", "Day", "AvgTemp")
+end_summer$Year <- as.numeric(1996:2015)
+
+
+for (y in 1:years) {
+  
+  cs[[y]] <- cusum(temp_df[[y]], center = mu_temp[y], std.dev = sd_temp[y],
+                   decision.interval = T, se.shift = C, plot = TRUE,
+                   title = paste("CUSUM Plot for", y + 1995))
+  
+  # Only store lower violations since we are looking to detect end of summer.
+  first_occ[y] <- cs[[y]]$violations$lower[1]
+  end_summer$Day[y] <- df[[1]][first_occ[y]]
+  end_summer$AvgTemp[y] <- round(mean(temp_df[[y]][1:first_occ[y]]))
+  
+}
+```
+
+
+The values of `C_temp` and `T_temp` represent \(T\)and \(C\) in the equation \(S_t = \max\{0, S_{t-1} + (\mu - x_t - C)\}\) such that when \(S_t \leq -T\), the CUSUM model will detect a change, in this case, the end of summer. T is negative since the values of \(S_t\) are negative in this model. The values are shown below (Hessing, 2024). 
+
+```{r end_of_summer}
+
+C_T <- as.data.frame(matrix(nrow = years, ncol = 3))
+colnames(C_T) <- c("Year", "C", "T")
+C_T$Year <- as.numeric(1996:2015)
+
+for (y in 1:years) {
+
+  C_T$C[y] <- (C/2) * sd_temp[y]
+  C_T$T[y] <- T * sd_temp[y]
+  
+}
+
+print(C_T)
+print(end_summer[,-3])
+
+```
+
+
+We observe from the table the unofficial end of summer between 1996 and 2015.
+
+<br>
+
+#### **Question 6.2.2**
+**Use a CUSUM approach to make a judgment of whether Atlanta’s summer climate has gotten warmer in that time (and if so, when).**
+
+This question is asking if summer has become warmer over the years. Just like question 6.2.1, we will use the average temperatures we found from 6.2.1 `end_summer$AvgTemp` to calculate \(\mu\) and \(\sigma\).
+
+```{r init_mu_sd}
+mu = round(mean(end_summer$AvgTemp), digit = 1)
+print(mu)
+sd = round(sd(end_summer$AvgTemp), digit = 2)
+print(sd)
+```
+
+We use the values above for the CUSUM model. The logic behind using `T = 2`, is that since we are limited in the amount of data points (or days), we want to detect a change faster. This is also the reason why `C = 1`, we want the model to be more sensitive to change.
+
+```{r cusum2}
+T = 2
+C = 1
+
+q <- cusum(end_summer$AvgTemp, center = mu, std.dev = sd,
+           decision.interval = T, se.shift = C, plot = TRUE,
+           title = "CUSUM Plot for Avg Temp Over the Years")
+
+q$violations$upper # No values in $lower
+print(end_summer)
+```
+
+From 1996 - 2009, there are small fluctuations from our baseline temperature of `86.4`. Once we get to 2010, we see a small increase in our CUSUM model `q`, and we start detecting our first change (when summer is getting warmer) during 2011 and 2012 given which represents 16 and 17 in our violations attribute. After, the CUSUM model drops back down to 0 since the temperatures from 2013 - 2015 is less than `86.4`.
+
+<br>
+It is difficult to say whether or not Atlanta's summer climate has gotten warmer with the current data. It would be better to say Atlanta experienced a much warmer climate in 2010 - 2012. There could also be outside factors such as El Nino, that could have reduced some of the years climate, which would make it harder to detect a change. To make a better decision, we would need more data.
+
+We can also try a different CUSUM model with days instead of temperature, answering the question in terms of summer lasting longer. For this analysis, we will use `floor()` since day 92.99 is still day 92. 
+
+```{r init_days}
+
+mu_day <- floor(mean(first_occ))
+sd_day <- floor(sd(first_occ))
+
+print(df[[1]][mu_day])
+print(sd_day)
+```
+
+We `T = 1` and `C = 1` because it provided the most information regarding detection of summer length. When `T = 2` or `C = 2`, the model did not detect any change.
+
+```{r days}
+T = 1
+C = 1
+
+q_day <- cusum(first_occ, center = mu_day, std.dev = sd_day,
+           decision.interval = T, se.shift = C, plot = TRUE,
+           title = "CUSUM Plot for Avg End of Summer")
+
+q_day$violations
+
+```
+
+The model `q_day` detected a change during 2005 - 2007, 2014, meaning it noticed an increase in summer days. But it also detected a decrease in the summer years during 2011 - 2012. These are the same years where we detected an increase in average temperature from the previous model `q`. This makes sense since summer tends to be hotter during July and September, and most of the data we used for were in those months for 2011 and 2012.
+<br>
+In conclusion, it's difficult to make a confident decision on whether summer is warmer or if summer is lasting longer with the current data.
+<br>
+
+## Citations
+1. Biswal, A. (2024, August 13). Hypothesis testing in statistics - types: Examples. Simplilearn.com. https://www.simplilearn.com/tutorials/statistics-tutorial/hypothesis-testing-in-statistics 
+
+2. Detecting outliers with Grubbs’ test. GraphPad by Dotmatics. (n.d.-a). https://www.graphpad.com/support/faq/detecting-outliers-with-grubbs-test/ 
+
+3. Hessing, T. (2024, February 4). Cumulative Sum Chart (cusum). Six Sigma Study Guide. https://sixsigmastudyguide.com/cumulative-sum-chart-cusum/ 
+
+4. Interpret the key results for Outlier Test. Minitab. (n.d.).
+https://support.minitab.com/en-us/minitab/help-and-how-to/statistics/basic-statistics/how-to/outlier-test/interpret-the-results/key-results/ 
+
+5. Li, D. (2020, October 23). Basic R guide for NSC Statistics. Chapter 12 Single Boxplot. https://bookdown.org/dli/rguide/single-boxplot.html#ggplot2-boxplot 
+
+6. Masking in outlier detection. why it can be harder to detect two outliers than one. GraphPad by Dotmatics. (n.d.-b). https://www.graphpad.com/support/faqid/1606/ 
+
+7. van Oppen, P. (2020, July 29). Modify axes in control chart RStudio. Stack Overflow. https://stackoverflow.com/questions/62623282/modify-axes-in-control-chart-rstudio 
+
+
+8. SAS Institute Inc. (2014). SAS/QC® 13.2 User's Guide. SAS Institute Inc.
